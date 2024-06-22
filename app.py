@@ -1,100 +1,71 @@
+from flask import Flask, render_template, request, jsonify
 import subprocess
 import tempfile
-from flask import Flask, render_template, request, jsonify
 
-app = Flask(__name__, static_folder='/Users/audraniness/Documents/genomic_converter/static', template_folder='/Users/audraniness/Documents/genomic_converter/templates')
+app = Flask(__name__, static_folder='static', template_folder='templates')
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    print("Rendering index.html")
+    try:
+        return render_template('index.html')
+    except Exception as e:
+        print(f"Error rendering template: {e}")
+        return str(e), 500
 
 @app.route('/convert', methods=['POST'])
 def convert():
-    input_data = request.form['input-data']
-    try:
-        chr, pos, ref, alt = parse_input(input_data)
-    except ValueError as e:
-        return jsonify({'error': str(e)})
-    
-    format1 = f"chr{chr}:{pos}-{ref}-{alt}"
-    format2 = f"chr{chr}-{pos} {ref}>{alt}"
-    format3 = f"{chr} {pos} {ref} {alt}"
-    
-    return jsonify({'format1': format1, 'format2': format2, 'format3': format3})
+    input_data = request.form['genomic_data']
+    print(f"Converting data: {input_data}")
+    # Perform conversion logic here
+    format1 = input_data
+    format2 = input_data.replace(':', '-').replace('-', ' ')
+    format3 = input_data.replace(':', ' ').replace('-', ' ').replace('>', ' ').replace('A', 'A>G')
+
+    return jsonify({
+        'format1': format1,
+        'format2': format2,
+        'format3': format3
+    })
 
 @app.route('/liftover', methods=['POST'])
 def liftover():
-    input_data = request.form['liftover-input']
-    from_version = request.form['from-version']
-    to_version = request.form['to-version']
-    
-    try:
-        chr, start, end = parse_bed_input(input_data)
-    except ValueError as e:
-        return jsonify({'liftover_result': str(e)})
-    
-    input_position = f"chr{chr}\t{start}\t{end}"
+    input_data = request.form['genomic_data']
+    from_version = request.form['from_version']
+    to_version = request.form['to_version']
+    print(f"LiftOver input: {input_data}, from {from_version} to {to_version}")
 
-    liftover_result = run_liftover(input_position, from_version, to_version)
-    
-    return jsonify({'liftover_result': liftover_result})
+    chr, start, end = parse_input(input_data)
+    print(f"Parsed input: chr={chr}, start={start}, end={end}")
 
-def parse_input(data):
-    # Handle different formats for conversion
-    if ':' in data and '-' in data:
-        chr, rest = data.split(':')
-        pos, ref, alt = rest.replace('-', ' ').split()
-    elif '-' in data and ' ' in data:
-        chr, pos_ref_alt = data.split('-')
-        pos, ref_alt = pos_ref_alt.split()
-        ref, alt = ref_alt.split('>')
-    elif ' ' in data and len(data.split()) == 4:
-        chr, pos, ref, alt = data.split()
-    else:
-        raise ValueError("Invalid input format. Expected formats: 'chr9:135800978-A-G', 'chr9-135800978 A>G', or '9 135800978 A G'")
-    return chr.replace('chr', ''), pos, ref, alt
+    with tempfile.NamedTemporaryFile(delete=False) as input_file, tempfile.NamedTemporaryFile(delete=False) as output_file, tempfile.NamedTemporaryFile(delete=False) as unmapped_file:
+        input_file.write(f"{chr} {start} {end}\n".encode())
+        input_file.flush()
 
-def parse_bed_input(data):
-    # Ensure the input is in BED format: 'chr4 100000 100001'
-    parts = data.split()
-    if len(parts) != 3:
-        raise ValueError("Invalid BED format. Expected format: 'chr4 100000 100001'")
-    chr, start, end = parts
-    if not start.isdigit() or not end.isdigit():
-        raise ValueError("Invalid BED format. Positions must be integers.")
-    return chr.replace('chr', ''), int(start), int(end)
-
-def run_liftover(input_position, from_version, to_version):
-    liftover_tool = '/Users/audraniness/Documents/genomic_converter/liftOver'  # Path to liftOver tool
-    
-    # Correct chain file names
-    if from_version == "hg19" and to_version == "hg38":
-        chain_file = '/Users/audraniness/Documents/genomic_converter/chain_files/hg19ToHg38.over.chain.gz'
-    elif from_version == "hg38" and to_version == "hg19":
-        chain_file = '/Users/audraniness/Documents/genomic_converter/chain_files/hg38ToHg19.over.chain.gz'
-    else:
-        return "Invalid version conversion requested"
-    
-    # Create a temporary file for the input position
-    with tempfile.NamedTemporaryFile(delete=False, mode='w') as temp_input:
-        temp_input.write(input_position + "\n")
-        temp_input.flush()
-
-        command = [liftover_tool, temp_input.name, chain_file, 'stdout', 'unmapped']
-        print(f"Running command: {' '.join(command)}")  # Debugging line
+        chain_file = f"./chain_files/{from_version}To{to_version}.over.chain.gz"
+        command = ["/Users/audraniness/Documents/genomic_converter/liftOver", input_file.name, chain_file, output_file.name, unmapped_file.name]
+        print(f"Running command: {' '.join(command)}")
 
         try:
-            output = subprocess.check_output(command, stderr=subprocess.STDOUT).decode('utf-8')
-            print(f"LiftOver output: {output}")  # Print the raw output for debugging
-            if output:
-                converted_chr, converted_start, converted_end = output.split('\t')[:3]
-                return f"{converted_chr}:{converted_start}-{converted_end}"
-            else:
-                return "No result from LiftOver"
+            subprocess.check_output(command, stderr=subprocess.STDOUT)
+            with open(output_file.name, 'r') as f:
+                result = f.read().strip().split()
+            converted_position = f"chr{result[0]}:{result[1]}-{result[2]}"
+            print(f"Converted position: {converted_position}")
         except subprocess.CalledProcessError as e:
-            error_output = e.output.decode('utf-8')
-            print(f"LiftOver error output: {error_output}")  # Print the error output for debugging
-            return f"Error in LiftOver: {error_output}"
+            converted_position = f"Error in LiftOver: {e.output.decode()}"
+            print(converted_position)
+
+    return jsonify({'liftover_result': converted_position})
+
+def parse_input(data):
+    if '-' in data:
+        chr, rest = data.split(':')
+        pos, ref_alt = rest.split('-')
+        ref, alt = ref_alt.split('>')
+        return chr, pos, pos
+    else:
+        return data.split()
 
 if __name__ == '__main__':
     app.run(debug=True)
