@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SNPpet</title>
+    <link rel="stylesheet" href="../static/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1 class="centered">SNPpet</h1>
+        <img src="../static/cat.png" alt="Cute Cat" class="centered cat-image">
+        <form id="conversion-form" action="/convert" method="POST">
+            <label for="input-data">Enter Genomic Data:</label>
+            <textarea id="input-data" name="input-data" rows="2" cols="50"></textarea>
+            <button type="submit">Convert</button>
+        </form>
+        <div id="output-data">
+            <!-- Converted data will appear here -->
+        </div>
+
+        <h2 class="centered">LiftOver</h2>
+        <form id="liftover-form" action="/liftover" method="POST">
+            <label for="liftover-input">Enter Genomic Data:</label>
+            <textarea id="liftover-input" name="liftover-input" rows="2" cols="50"></textarea>
+            <label for="from-version">From Version:</label>
+            <select id="from-version" name="from-version">
+                <option value="hg19">GRCh37/hg19</option>
+                <option value="hg38">GRCh38/hg38</option>
+            </select>
+            <label for="to-version">To Version:</label>
+            <select id="to-version" name="to-version">
+                <option value="hg19">GRCh37/hg19</option>
+                <option value="hg38">GRCh38/hg38</option>
+            </select>
+            <button type="submit">Convert</button>
+        </form>
+        <div id="liftover-output">
+            <!-- LiftOver result will appear here -->
+        </div>
+
+        <div class="links">
+            <h2>Useful Links:</h2>
+            <ul>
+                <li><a href="https://franklin.genoox.com/clinical-db/home" target="_blank">Franklin</a></li>
+                <li><a href="https://genome.ucsc.edu/" target="_blank">UCSC Genome Browser</a></li>
+                <li><a href="https://www.ncbi.nlm.nih.gov/clinvar/" target="_blank">ClinVar</a></li>
+                <li><a href="https://gnomad.broadinstitute.org" target="_blank">gnomAD</a></li>
+            </ul>
+        </div>
+    </div>
+    <script src="../static/script.js"></script>
+</body>
+</html>
