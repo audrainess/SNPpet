@@ -1,71 +1,52 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, request, jsonify, render_template
 import subprocess
-import tempfile
+import os
 
-app = Flask(__name__, static_folder='static', template_folder='templates')
+app = Flask(__name__)
 
 @app.route('/')
 def index():
-    print("Rendering index.html")
-    try:
-        return render_template('index.html')
-    except Exception as e:
-        print(f"Error rendering template: {e}")
-        return str(e), 500
+    return render_template('index.html')
 
 @app.route('/convert', methods=['POST'])
 def convert():
-    input_data = request.form['genomic_data']
-    print(f"Converting data: {input_data}")
-    # Perform conversion logic here
-    format1 = input_data
-    format2 = input_data.replace(':', '-').replace('-', ' ')
-    format3 = input_data.replace(':', ' ').replace('-', ' ').replace('>', ' ').replace('A', 'A>G')
+    input_data = request.form['input-data']
+    chr, pos, ref, alt = parse_input(input_data)
+    
+    format1 = f"{chr}:{pos}-{ref}-{alt}"
+    format2 = f"{chr}-{pos} {ref}>{alt}"
+    format3 = f"{chr} {pos} {ref} {alt}"
+    format_bed = f"{chr} {int(pos) - 1} {pos}"
 
-    return jsonify({
-        'format1': format1,
-        'format2': format2,
-        'format3': format3
-    })
+    return jsonify(format1=format1, format2=format2, format3=format3, format_bed=format_bed)
+
+def parse_input(data):
+    parts = data.replace(':', ' ').replace('-', ' ').replace('>', ' ').split()
+    if len(parts) == 4:
+        return parts
+    elif len(parts) == 3:
+        chr, pos, change = parts
+        ref, alt = change.split('>')
+        return chr, pos, ref, alt
+    else:
+        raise ValueError("Invalid input format")
 
 @app.route('/liftover', methods=['POST'])
 def liftover():
-    input_data = request.form['genomic_data']
-    from_version = request.form['from_version']
-    to_version = request.form['to_version']
-    print(f"LiftOver input: {input_data}, from {from_version} to {to_version}")
-
-    chr, start, end = parse_input(input_data)
-    print(f"Parsed input: chr={chr}, start={start}, end={end}")
-
-    with tempfile.NamedTemporaryFile(delete=False) as input_file, tempfile.NamedTemporaryFile(delete=False) as output_file, tempfile.NamedTemporaryFile(delete=False) as unmapped_file:
-        input_file.write(f"{chr} {start} {end}\n".encode())
-        input_file.flush()
-
-        chain_file = f"./chain_files/{from_version}To{to_version}.over.chain.gz"
-        command = ["/Users/audraniness/Documents/genomic_converter/liftOver", input_file.name, chain_file, output_file.name, unmapped_file.name]
-        print(f"Running command: {' '.join(command)}")
-
-        try:
-            subprocess.check_output(command, stderr=subprocess.STDOUT)
-            with open(output_file.name, 'r') as f:
-                result = f.read().strip().split()
-            converted_position = f"chr{result[0]}:{result[1]}-{result[2]}"
-            print(f"Converted position: {converted_position}")
-        except subprocess.CalledProcessError as e:
-            converted_position = f"Error in LiftOver: {e.output.decode()}"
-            print(converted_position)
-
-    return jsonify({'liftover_result': converted_position})
-
-def parse_input(data):
-    if '-' in data:
-        chr, rest = data.split(':')
-        pos, ref_alt = rest.split('-')
-        ref, alt = ref_alt.split('>')
-        return chr, pos, pos
-    else:
-        return data.split()
+    input_data = request.form['liftover-input']
+    from_version = request.form['from-version']
+    to_version = request.form['to-version']
+    chr, start, end = input_data.split()
+    
+    chain_file = f"./chain_files/{from_version}To{to_version}.over.chain.gz"
+    
+    result = subprocess.run(['liftOver', f"{chr}:{start}-{end}", chain_file, 'stdout', 'unmapped'],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        return jsonify(liftover_result=f"Error in LiftOver: {result.stderr}")
+    
+    converted_position = result.stdout.strip().split()[1]
+    return jsonify(liftover_result=converted_position)
 
 if __name__ == '__main__':
     app.run(debug=True)
