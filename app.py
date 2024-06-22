@@ -1,8 +1,12 @@
 from flask import Flask, request, jsonify, render_template
-import subprocess
-import os
+import re
+from pyliftover import LiftOver
 
 app = Flask(__name__)
+
+# Initialize LiftOver objects
+lo_38_to_37 = LiftOver('hg38', 'hg19')
+lo_37_to_38 = LiftOver('hg19', 'hg38')
 
 @app.route('/')
 def index():
@@ -10,43 +14,95 @@ def index():
 
 @app.route('/convert', methods=['POST'])
 def convert():
-    input_data = request.form['input-data']
-    chr, pos, ref, alt = parse_input(input_data)
+    input_data = request.form.get('input_data', '')
+    if not input_data:
+        return jsonify({'error': 'No input data provided'}), 400
     
-    format1 = f"{chr}:{pos}-{ref}-{alt}"
-    format2 = f"{chr}-{pos} {ref}>{alt}"
-    format3 = f"{chr} {pos} {ref} {alt}"
-    format_bed = f"{chr} {int(pos) - 1} {pos}"
-
-    return jsonify(format1=format1, format2=format2, format3=format3, format_bed=format_bed)
-
-def parse_input(data):
-    parts = data.replace(':', ' ').replace('-', ' ').replace('>', ' ').split()
-    if len(parts) == 4:
-        return parts
-    elif len(parts) == 3:
-        chr, pos, change = parts
-        ref, alt = change.split('>')
-        return chr, pos, ref, alt
-    else:
-        raise ValueError("Invalid input format")
+    try:
+        chr, start, end, ref, alt = parse_input(input_data)
+        
+        franklin = f"chr{chr}:{start}-{end}-{ref}-{alt}" if ref and alt else f"chr{chr}:{start}-{end}"
+        ucsc = f"chr{chr}:{start}-{end}"
+        clinvar = f"chr{chr}:{start}-{end}"
+        gnomad = f"{chr}-{start}-{end}-{ref}-{alt}" if ref and alt else f"{chr}-{start}-{end}"
+        other = f"{chr} {start} {end}"
+        
+        return jsonify({
+            'franklin': franklin,
+            'ucsc': ucsc,
+            'clinvar': clinvar,
+            'gnomad': gnomad,
+            'other': other
+        })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
 
 @app.route('/liftover', methods=['POST'])
 def liftover():
-    input_data = request.form['liftover-input']
-    from_version = request.form['from-version']
-    to_version = request.form['to-version']
-    chr, start, end = input_data.split()
+    input_data = request.form.get('input_data', '')
+    from_version = request.form.get('from_version', '')
+    to_version = request.form.get('to_version', '')
+
+    if not input_data or not from_version or not to_version:
+        return jsonify({'error': 'Missing required fields'}), 400
+
+    try:
+        chr, start, end = parse_liftover_input(input_data)
+        result = perform_liftover(chr, int(start), int(end), from_version, to_version)
+        return jsonify({'liftover_result': result})
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+def parse_input(input_data):
+    input_data = input_data.strip()
     
-    chain_file = f"./chain_files/{from_version}To{to_version}.over.chain.gz"
+    pattern = r'(?:chr)?(\d+|X|Y|MT?)[:|\s|-]?\s*(\d+)\s*[-|:]?\s*(\d+)?\s*(?:([ACGT])[\s>-]([ACGT]))?'
+    match = re.match(pattern, input_data, re.IGNORECASE)
     
-    result = subprocess.run(['liftOver', f"{chr}:{start}-{end}", chain_file, 'stdout', 'unmapped'],
-                            capture_output=True, text=True)
-    if result.returncode != 0:
-        return jsonify(liftover_result=f"Error in LiftOver: {result.stderr}")
+    if not match:
+        raise ValueError("Unable to parse input. Please check the format.")
     
-    converted_position = result.stdout.strip().split()[1]
-    return jsonify(liftover_result=converted_position)
+    chr, start, end, ref, alt = match.groups()
+    
+    end = end or start
+    ref = ref.upper() if ref else None
+    alt = alt.upper() if alt else None
+    
+    return chr, start, end, ref, alt
+
+def parse_liftover_input(input_data):
+    pattern = r'(?:chr)?(\d+|X|Y|MT?)[:|\s|-]?\s*(\d+)\s*[-|:]?\s*(\d+)?'
+    match = re.match(pattern, input_data, re.IGNORECASE)
+    
+    if not match:
+        raise ValueError("Unable to parse input. Please check the format.")
+    
+    chr, start, end = match.groups()
+    end = end or start  # If end is not provided, use start
+    
+    return f"chr{chr}", start, end
+
+def perform_liftover(chr, start, end, from_version, to_version):
+    if from_version == 'GRCh38/hg38' and to_version == 'GRCh37/hg19':
+        lo = lo_38_to_37
+    elif from_version == 'GRCh37/hg19' and to_version == 'GRCh38/hg38':
+        lo = lo_37_to_38
+    else:
+        raise ValueError("Unsupported genome versions")
+
+    result = lo.convert_coordinate(chr, start)
+    if result:
+        new_chr, new_start, strand, _ = result[0]
+        new_end = new_start + (end - start)
+        return f"{new_chr}:{new_start}-{new_end}"
+    else:
+        return "Conversion failed. Coordinate not found in target assembly."
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, port=5000)
+
+import os
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
