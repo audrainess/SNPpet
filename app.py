@@ -1,8 +1,12 @@
 from flask import Flask, request, jsonify, render_template
 import re
 from pyliftover import LiftOver
+import os
 
 app = Flask(__name__)
+
+app.secret_key = os.environ.get('SECRET_KEY')
+app.debug = os.environ.get('DEBUG', 'False').lower() == 'true'
 
 # Initialize LiftOver objects
 lo_38_to_37 = LiftOver('hg38', 'hg19')
